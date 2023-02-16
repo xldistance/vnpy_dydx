@@ -108,6 +108,8 @@ api_key_credentials_map: Dict[str, str] = {}
 class DydxGateway(BaseGateway):
     """
     * vn.py用于对接dYdX交易所的交易接口
+    * 进入https://trade.dydx.exchange/portfolio/overview，鼠标右键点击【检查，右上角>>找到【应用】，左侧【本地存储空间】/https://trade.dydx.exchange/找到【STARK_KEY_PAIRS】字典和【API_KEY_PAIRS】，需要用到STARK_KEY_PAIRS的privateKey(对应vn.py里面的stark_private_key)和API_KEY_PAIRS里面的key，secret，passphrase，其他参数不用改
+    * 链接到dydx的钱包资产必须走erc20链
     """
     default_setting: Dict[str, Any] = {
         "key": "",
@@ -850,10 +852,7 @@ class OrderBook():
             datetime=datetime.now(TZ_INFO),
             gateway_name=gateway.gateway_name,
         )
-
-        self.offset: int = 0
         self.last_price: float = 0.0
-        self.date: datetime.date = None
     #------------------------------------------------------------------------------------------------- 
     def on_message(self, data: dict) -> None:
         """
@@ -876,63 +875,44 @@ class OrderBook():
         tick: TickData = self.tick
         tick.last_price = float(data[0]["price"])
         tick.datetime = get_local_datetime(data[0]["createdAt"])
-
-        if not self.date:
-            self.date = tick.datetime.date()
-
-        self.gateway.on_tick(copy(tick))
     #------------------------------------------------------------------------------------------------- 
     def on_update(self, data: dict, dt:datetime) -> None:
         """
         盘口更新推送
         """
-        # 保证收到的价格offset是最新的(值递增)
-        offset: int = int(data["offset"])
-        if offset < self.offset:
-            return
-        self.offset = offset
-
         for price, ask_volume in data["asks"]:
             price: float = float(price)
             ask_volume: float = float(ask_volume)
-            if price in self.asks:
-                if ask_volume > 0:
-                    ask_volume: float = float(ask_volume)
-                    self.asks[price] = ask_volume
-                else:
-                    del self.asks[price]
+            if ask_volume:
+                self.asks[price] = ask_volume
             else:
-                if ask_volume > 0:
-                    self.asks[price] = ask_volume
+                if price in self.asks:
+                    del self.asks[price]
 
         for price, bid_volume in data["bids"]:
             price: float = float(price)
             bid_volume: float = float(bid_volume)
-            if price in self.bids:
-                if bid_volume > 0:
-                    self.bids[price] = bid_volume
-                else:
-                    del self.bids[price]
+            if bid_volume:
+                self.bids[price] = bid_volume
             else:
-                if bid_volume > 0:
-                    self.bids[price] = bid_volume
-
+                if price in self.bids:
+                    del self.bids[price]
         self.generate_tick(dt)
     #------------------------------------------------------------------------------------------------- 
     def on_snapshot(self, asks: Sequence[List], bids: Sequence[List], dt: datetime) -> None:
         """
         盘口推送回报
         """
+        self.bids.clear()
+        self.asks.clear()
         for n in range(len(asks)):
             price = asks[n]["price"]
             volume = asks[n]["size"]
-
             self.asks[float(price)] = float(volume)
 
         for n in range(len(bids)):
             price = bids[n]["price"]
             volume = bids[n]["size"]
-
             self.bids[float(price)] = float(volume)
 
         self.generate_tick(dt)
@@ -942,24 +922,26 @@ class OrderBook():
         合成tick
         """
         tick: TickData = self.tick
+        # bids和asks删除错误价格
+        if not tick.last_price:
+            return
+        for price,volume in list(self.bids.items()):
+            if tick.last_price < price:
+                self.bids.pop(price)
+        for price,volume in list(self.asks.items()):
+            if tick.last_price > price:
+                self.asks.pop(price)
 
-        bids_keys: list = self.bids.keys()
-        bids_keys: list = sorted(bids_keys, reverse=True)
+        sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
+        sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
 
-        for i in range(min(5, len(bids_keys))):
-            price: float = float(bids_keys[i])
-            volume: float = float(self.bids[bids_keys[i]])
-            setattr(tick, f"bid_price_{i + 1}", price)
-            setattr(tick, f"bid_volume_{i + 1}", volume)
-
-        asks_keys: list = self.asks.keys()
-        asks_keys: list = sorted(asks_keys)
-
-        for i in range(min(5, len(asks_keys))):
-            price: float = float(asks_keys[i])
-            volume: float = float(self.asks[asks_keys[i]])
-            setattr(tick, f"ask_price_{i + 1}", price)
-            setattr(tick, f"ask_volume_{i + 1}", volume)
+        for index,value in enumerate(sorted_bids):
+            setattr(tick, f"bid_price_{index + 1}", value[0])
+            setattr(tick, f"bid_volume_{index + 1}", value[1])
+        
+        for index,value in enumerate(sorted_asks):
+            setattr(tick, f"ask_price_{index + 1}", value[0])
+            setattr(tick, f"ask_volume_{index + 1}", value[1])
 
         tick.datetime = dt
         self.gateway.on_tick(copy(tick))
