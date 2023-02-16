@@ -392,6 +392,8 @@ class DydxRestApi(RestClient):
             )
             if 0 < order.traded < order.volume:
                 order.status = Status.PARTTRADED
+            if order.orderid in list(self.gateway.orders):
+                order.offset = self.gateway.orders[order.orderid].offset
             self.gateway.on_order(order)
     #------------------------------------------------------------------------------------------------- 
     def new_orderid(self) -> str:
@@ -470,8 +472,8 @@ class DydxRestApi(RestClient):
         """
         委托撤单
         """
-        order_no: str = self.gateway.local_sys_map.get(req.orderid, "")
-        if not order_no:
+        system_id: str = self.gateway.local_sys_map.get(req.orderid, "")
+        if not system_id:
             self.gateway.write_log(f"撤单失败，找不到{req.orderid}对应的系统委托号")
             return
 
@@ -483,7 +485,7 @@ class DydxRestApi(RestClient):
 
         self.add_request(
             method="DELETE",
-            path=f"/v3/orders/{order_no}",
+            path=f"/v3/orders/{system_id}",
             callback=self.on_cancel_order,
             data=data,
             on_failed=self.on_cancel_failed,
@@ -794,7 +796,6 @@ class DydxWebsocketApi(WebsocketClient):
                 orderid=order_data["clientId"],
                 type=ORDERTYPE_DYDX2VT[order_data["type"]],
                 direction=DIRECTION_DYDX2VT[order_data["side"]],
-                offset=Offset.NONE,
                 price=float(order_data["price"]),
                 volume=float(order_data["size"]),
                 traded=float(order_data["size"]) - float(order_data["remainingSize"]),
@@ -804,6 +805,9 @@ class DydxWebsocketApi(WebsocketClient):
             )
             if 0 < order.traded < order.volume:
                 order.status = Status.PARTTRADED
+            if order.orderid in list(self.gateway.orders):
+                order.offset = self.gateway.orders[order.orderid].offset
+
             self.gateway.on_order(order)
 
         if packet["type"] == "subscribed":
@@ -921,22 +925,21 @@ class OrderBook():
         合成tick
         """
         tick: TickData = self.tick
-        # bids和asks删除错误价格
         if not tick.last_price:
             return
-        if self.bids and self.asks:
-            bid_price_1 = list(self.bids)[0]
-            ask_price_1 = list(self.asks)[0]
-            if bid_price_1 >= ask_price_1:
-                if tick.last_price > bid_price_1:
-                    if ask_price_1 in list(self.asks):
-                        self.asks.pop(ask_price_1)
-                elif tick.last_price < bid_price_1:
-                    if bid_price_1 in list(self.bids):
-                        self.bids.pop(bid_price_1)
-
         sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
         sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
+
+        bid_price_1 = sorted_bids[0][0]
+        ask_price_1 = sorted_asks[0][0]
+        # bids和asks删除错误价格
+        if bid_price_1 >= ask_price_1:
+            if tick.last_price > bid_price_1:
+                if ask_price_1 in list(self.asks):
+                    self.asks.pop(ask_price_1)
+            elif tick.last_price < bid_price_1:
+                if bid_price_1 in list(self.bids):
+                    self.bids.pop(bid_price_1)
         # 重置bids,asks防止字典长度一直递增
         self.bids = {}
         self.asks = {}
