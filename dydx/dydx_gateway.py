@@ -924,12 +924,16 @@ class OrderBook():
         # bids和asks删除错误价格
         if not tick.last_price:
             return
-        for price,volume in list(self.bids.items()):
-            if tick.last_price < price:
-                self.bids.pop(price)
-        for price,volume in list(self.asks.items()):
-            if tick.last_price > price:
-                self.asks.pop(price)
+        if self.bids and self.asks:
+            bid_price_1 = list(self.bids)[0]
+            ask_price_1 = list(self.asks)[0]
+            if bid_price_1 >= ask_price_1:
+                if tick.last_price > bid_price_1:
+                    if ask_price_1 in list(self.asks):
+                        self.asks.pop(ask_price_1)
+                elif tick.last_price < bid_price_1:
+                    if bid_price_1 in list(self.bids):
+                        self.bids.pop(bid_price_1)
 
         sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
         sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
