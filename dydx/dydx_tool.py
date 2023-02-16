@@ -436,7 +436,7 @@ ASSET_RESOLUTION = {
     'ZRX': '1e6',
     'XMR': '1e8',
     'ZEC': '1e8',
-	"ENJ": '1e6',
+    "ENJ": '1e6',
     "ETC": '1e7',
     "XLM": '1e5',
     "TRX": '1e4',
