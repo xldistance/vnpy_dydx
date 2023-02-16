@@ -852,7 +852,6 @@ class OrderBook():
             datetime=datetime.now(TZ_INFO),
             gateway_name=gateway.gateway_name,
         )
-        self.last_price: float = 0.0
     #------------------------------------------------------------------------------------------------- 
     def on_message(self, data: dict) -> None:
         """
