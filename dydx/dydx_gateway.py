@@ -932,8 +932,8 @@ class OrderBook():
             if tick.last_price > price:
                 self.asks.pop(price)
 
-        sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)
-        sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)
+        sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
+        sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
         # 重置bids,asks防止字典长度一直递增
         self.bids = {}
         self.asks = {}
