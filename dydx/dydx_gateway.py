@@ -862,7 +862,7 @@ class OrderBook():
         channel: str = data["channel"]
         dt: datetime = datetime.now(TZ_INFO)
         if type_ == "subscribed" and channel == "v3_orderbook":
-            self.on_snapshot(data["contents"]["asks"], data["contents"]["bids"], dt)
+            self.on_snapshot(data["contents"]["asks"][:5], data["contents"]["bids"][:5], dt)
         elif type_ == "channel_data" and channel == "v3_orderbook":
             self.on_update(data["contents"], dt)
         elif channel == "v3_trades":
@@ -932,16 +932,20 @@ class OrderBook():
             if tick.last_price > price:
                 self.asks.pop(price)
 
-        sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
-        sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
-
+        sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)
+        sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)
+        # 重置bids,asks防止字典长度一直递增
+        self.bids = {}
+        self.asks = {}
         for index,value in enumerate(sorted_bids):
             setattr(tick, f"bid_price_{index + 1}", value[0])
             setattr(tick, f"bid_volume_{index + 1}", value[1])
-        
+            self.bids[value[0]] = value[1]
+
         for index,value in enumerate(sorted_asks):
             setattr(tick, f"ask_price_{index + 1}", value[0])
             setattr(tick, f"ask_volume_{index + 1}", value[1])
+            self.asks[value[0]] = value[1]
 
         tick.datetime = dt
         self.gateway.on_tick(copy(tick))
