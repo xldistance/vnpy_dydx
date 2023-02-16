@@ -579,7 +579,7 @@ class DydxRestApi(RestClient):
         balance: float = float(data["equity"])
         available: float = float(data["freeCollateral"])
         account: AccountData = AccountData(
-            accountid=data["id"],
+            accountid=f"USDC_{self.gateway_name}",
             balance=balance,
             available = available,
             frozen=balance - available,
@@ -924,12 +924,12 @@ class OrderBook():
         # bids和asks删除错误价格
         if not tick.last_price:
             return
-        for price,volume in list(self.bids.items()):
-            if tick.last_price < price:
-                self.bids.pop(price)
-        for price,volume in list(self.asks.items()):
-            if tick.last_price > price:
-                self.asks.pop(price)
+        for price in list(self.bids):
+            if price in list(self.asks):
+                if tick.last_price < price:
+                    self.bids.pop(price)
+                elif tick.last_price > price:
+                    self.asks.pop(price)
 
         sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
         sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
