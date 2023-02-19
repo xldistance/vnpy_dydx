@@ -11,6 +11,7 @@ import base64
 import json
 from peewee import chunked
 from requests.exceptions import SSLError
+from urllib.parse import urlencode
 
 from vnpy.trader.database import database_manager
 from vnpy.trader.constant import (
@@ -140,13 +141,15 @@ class DydxGateway(BaseGateway):
         self.id: str = ""
         self.sys_local_map: Dict[str, str] = {}
         self.local_sys_map: Dict[str, str] = {}
-
+        self.count:int = 0
         self.orders: Dict[str, OrderData] = {}
         self.recording_list = [vt_symbol for vt_symbol in self.recording_list if extract_vt_symbol(vt_symbol)[2] == self.gateway_name and not extract_vt_symbol(vt_symbol)[0].endswith("99")]
         #历史数据合约列表
         self.history_contracts = copy(self.recording_list)
         #rest查询合约列表
         self.query_contracts = [vt_symbol for vt_symbol in GetFilePath.all_trading_vt_symbols if extract_vt_symbol(vt_symbol)[2] == self.gateway_name and not extract_vt_symbol(vt_symbol)[0].endswith("99")]
+        #self.query_function = [self.query_account,self.query_active_orders]
+        self.query_function = [self.query_active_orders]
     #------------------------------------------------------------------------------------------------- 
     def connect(self, log_account: dict) -> None:
         """
@@ -158,6 +161,7 @@ class DydxGateway(BaseGateway):
         api_key_credentials_map["secret"] = log_account["secret"]
         api_key_credentials_map["passphrase"] = log_account["passphrase"]
         api_key_credentials_map["stark_private_key"] = log_account["stark_private_key"]
+        api_key_credentials_map["wallet_address"] = log_account["wallet_address"]
         server: str = log_account["服务器"]
         proxy_host: str = log_account["代理地址"]
         proxy_port: int = log_account["代理端口"]
@@ -194,11 +198,11 @@ class DydxGateway(BaseGateway):
     def query_position(self) -> None:
         pass
     #------------------------------------------------------------------------------------------------- 
-    def query_active_orders(self) -> None:
+    def query_active_orders(self,symbol:str) -> None:
         """
         查询活动委托单
         """
-        self.rest_api.query_active_orders()
+        self.rest_api.query_active_orders(symbol)
     #-------------------------------------------------------------------------------------------------   
     def query_history(self,event):
         """
@@ -219,12 +223,21 @@ class DydxGateway(BaseGateway):
         """
         处理定时任务
         """
-        self.query_account()
-        if self.query_contracts:
-            vt_symbol = self.query_contracts.pop(0)
-            symbol,exchange,gateway_name = extract_vt_symbol(vt_symbol)
-            self.query_active_orders(symbol)
-            self.query_contracts.append(vt_symbol)
+        self.count += 1
+        if self.count < 5:
+            return
+        self.count = 0
+        func = self.query_function.pop(0)
+        if func == self.query_account:
+            func()
+        else:
+            # 查询活动委托单
+            if self.query_contracts:
+                vt_symbol = self.query_contracts.pop(0)
+                symbol,exchange,gateway_name = extract_vt_symbol(vt_symbol)
+                func(symbol)
+                self.query_contracts.append(vt_symbol)
+        self.query_function.append(func)
     #------------------------------------------------------------------------------------------------- 
     def close(self) -> None:
         """
@@ -268,33 +281,41 @@ class DydxRestApi(RestClient):
         self.gateway_name: str = gateway.gateway_name
 
         self.order_count: int = 0
-#------------------------------------------------------------------------------------------------- 
+    #------------------------------------------------------------------------------------------------- 
     def sign(self, request: Request) -> Request:
         """
         生成dYdX签名
         """
         security: Security = request.data["security"]
         now_iso_string = generate_now_iso()
+
         if security == Security.PUBLIC:
             request.data = None
             return request
         else:
             request.data.pop("security")
+            if request.method in ["GET","DELETE"]:
+                api_params = request.params
+                if api_params:
+                    request.path += "?" +  '&'.join('{key}={value}'.format(key=x[0], value=x[1]) for x in api_params.items() if x[1] is not None)
+                    api_params ={}
+            else:
+                api_params = request.data
+                if not api_params:
+                    api_params = request.data = {}
+                request.data = json.dumps(api_params)
             signature: str = sign(
                 request_path=request.path,
                 method=request.method,
                 iso_timestamp=now_iso_string,
-                data=request.data
+                data=api_params
             )
-            request.data = json.dumps(request.data)
 
         headers = {
             "DYDX-SIGNATURE": signature,
             "DYDX-API-KEY": api_key_credentials_map["key"],
             "DYDX-TIMESTAMP": now_iso_string,
             "DYDX-PASSPHRASE": api_key_credentials_map["passphrase"],
-            "Accept": 'application/json',
-            "Content-Type": 'application/json'
         }
         request.headers = headers
 
@@ -348,12 +369,15 @@ class DydxRestApi(RestClient):
         data: dict = {
             "security": Security.PRIVATE
         }
-
+        params = {
+            "ethereumAddress":api_key_credentials_map["wallet_address"]
+        }
         self.add_request(
             method="GET",
             path=f"/v3/accounts/{self.gateway.id}",
             callback=self.on_query_account,
-            data=data
+            data=data,
+            params =params
         )
     #------------------------------------------------------------------------------------------------- 
     def query_active_orders(self,symbol:str) -> None:
@@ -514,7 +538,7 @@ class DydxRestApi(RestClient):
         )
         time_consuming_start = time()
         if resp.status_code // 100 != 2:
-            msg: str = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
+            msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
             self.gateway.write_log(msg)
         else:
             data: dict = resp.json()
@@ -634,7 +658,7 @@ class DydxRestApi(RestClient):
         order.status = Status.REJECTED
         self.gateway.on_order(order)
 
-        msg: str = f"委托失败，状态码：{status_code}，信息：{request.response.text}"
+        msg = f"委托失败，状态码：{status_code}，信息：{request.response.text}"
         self.gateway.write_log(msg)
     #------------------------------------------------------------------------------------------------- 
     def on_cancel_order(self, data: dict, request: Request) -> None:
@@ -652,7 +676,7 @@ class DydxRestApi(RestClient):
             order.status = Status.REJECTED
             self.gateway.on_order(order)
 
-        msg: str = f"撤单失败，状态码：{status_code}，信息：{request.response.text}"
+        msg = f"撤单失败，状态码：{status_code}，信息：{request.response.text}"
         self.gateway.write_log(msg)
 #------------------------------------------------------------------------------------------------- 
 class DydxWebsocketApi(WebsocketClient):
@@ -705,7 +729,7 @@ class DydxWebsocketApi(WebsocketClient):
         """
         连接断开回报
         """
-        self.gateway.write_log("Websocket API连接断开")
+        self.gateway.write_log(f"交易接口：{self.gateway_name}，Websocket API连接断开")
     #------------------------------------------------------------------------------------------------- 
     def subscribe(self, req: SubscribeRequest) -> None:
         """
@@ -761,7 +785,7 @@ class DydxWebsocketApi(WebsocketClient):
         """
         type = packet.get("type", None)
         if type == "error":
-            msg: str = packet["message"]
+            msg = packet["message"]
             # 过滤重复订阅错误
             if "already subscribed" not in msg:
                 self.gateway.write_log(f"交易接口websocket收到错误回报：{msg}")
@@ -937,9 +961,10 @@ class OrderBook():
             if tick.last_price > bid_price_1:
                 if ask_price_1 in list(self.asks):
                     self.asks.pop(ask_price_1)
-            elif tick.last_price < bid_price_1:
+            if (tick.last_price < bid_price_1 or bid_price_1 == ask_price_1):
                 if bid_price_1 in list(self.bids):
                     self.bids.pop(bid_price_1)
+
         # 重置bids,asks防止字典长度一直递增
         self.bids = {}
         self.asks = {}
@@ -980,14 +1005,12 @@ def sign(
     body: str = ""
     if data:
         body = json.dumps(data, separators=(',', ':'))
-
     message_string = "".join([
         iso_timestamp,
         method,
         request_path,
         body
     ])
-
     hashed = hmac.new(
         base64.urlsafe_b64decode(
             (api_key_credentials_map["secret"]).encode('utf-8'),
