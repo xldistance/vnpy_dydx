@@ -141,15 +141,13 @@ class DydxGateway(BaseGateway):
         self.id: str = ""
         self.sys_local_map: Dict[str, str] = {}
         self.local_sys_map: Dict[str, str] = {}
-        self.count:int = 0
         self.orders: Dict[str, OrderData] = {}
         self.recording_list = [vt_symbol for vt_symbol in self.recording_list if extract_vt_symbol(vt_symbol)[2] == self.gateway_name and not extract_vt_symbol(vt_symbol)[0].endswith("99")]
         #历史数据合约列表
         self.history_contracts = copy(self.recording_list)
         #rest查询合约列表
         self.query_contracts = [vt_symbol for vt_symbol in GetFilePath.all_trading_vt_symbols if extract_vt_symbol(vt_symbol)[2] == self.gateway_name and not extract_vt_symbol(vt_symbol)[0].endswith("99")]
-        #self.query_function = [self.query_account,self.query_active_orders]
-        self.query_function = [self.query_active_orders]
+        self.query_function = [self.query_account,self.query_active_orders]
     #------------------------------------------------------------------------------------------------- 
     def connect(self, log_account: dict) -> None:
         """
@@ -223,10 +221,6 @@ class DydxGateway(BaseGateway):
         """
         处理定时任务
         """
-        self.count += 1
-        if self.count < 5:
-            return
-        self.count = 0
         func = self.query_function.pop(0)
         if func == self.query_account:
             func()
@@ -286,24 +280,24 @@ class DydxRestApi(RestClient):
         """
         生成dYdX签名
         """
-        security: Security = request.data["security"]
+        security: Security = request.data.pop("security")
         now_iso_string = generate_now_iso()
 
         if security == Security.PUBLIC:
             request.data = None
             return request
         else:
-            request.data.pop("security")
             if request.method in ["GET","DELETE"]:
                 api_params = request.params
                 if api_params:
                     request.path += "?" +  '&'.join('{key}={value}'.format(key=x[0], value=x[1]) for x in api_params.items() if x[1] is not None)
-                    api_params ={}
+                    api_params = {}
             else:
                 api_params = request.data
                 if not api_params:
                     api_params = request.data = {}
                 request.data = json.dumps(api_params)
+
             signature: str = sign(
                 request_path=request.path,
                 method=request.method,
@@ -367,7 +361,7 @@ class DydxRestApi(RestClient):
         查询资金
         """
         data: dict = {
-            "security": Security.PRIVATE
+            "security": Security.PRIVATE,
         }
         params = {
             "ethereumAddress":api_key_credentials_map["wallet_address"]
@@ -377,30 +371,33 @@ class DydxRestApi(RestClient):
             path=f"/v3/accounts/{self.gateway.id}",
             callback=self.on_query_account,
             data=data,
-            params =params
+            #params= params
         )
     #------------------------------------------------------------------------------------------------- 
     def query_active_orders(self,symbol:str) -> None:
+        """
+        查询活动委托单
+        """
         data: dict = {
-            "security": Security.PRIVATE
+            "security": Security.PRIVATE,
         }
         params = {
             "market":symbol,
-            "status":["PENDING","OPEN","UNTRIGGERED"]
+            "status":"PENDING"
         }
         self.add_request(
             method="GET",
             path="/v3/orders",
             callback=self.on_active_orders,
             data=data,
-            params=params
+            #params = params,
         )
     #------------------------------------------------------------------------------------------------- 
     def on_active_orders(self,data: dict, request: Request) -> None:
         """
         收到活动委托单回报
         """
-        for order_data in data:
+        for order_data in data["orders"]:
             order: OrderData = OrderData(
                 symbol=order_data["market"],
                 exchange=Exchange.DYDX,
@@ -437,7 +434,7 @@ class DydxRestApi(RestClient):
         委托下单
         """
         # 生成本地委托号
-        orderid: str = req.symbol + "-" + self.new_orderid()
+        orderid: str = self.new_orderid()
 
         # 推送提交中事件
         order: OrderData = req.create_order_data(
@@ -907,23 +904,24 @@ class OrderBook():
         """
         盘口更新推送
         """
-        for price, ask_volume in data["asks"]:
-            price: float = float(price)
-            ask_volume: float = float(ask_volume)
-            if ask_volume:
-                self.asks[price] = ask_volume
-            else:
-                if price in self.asks:
-                    del self.asks[price]
-
-        for price, bid_volume in data["bids"]:
-            price: float = float(price)
-            bid_volume: float = float(bid_volume)
-            if bid_volume:
-                self.bids[price] = bid_volume
-            else:
-                if price in self.bids:
-                    del self.bids[price]
+        if data["asks"]:
+            for price, ask_volume in data["asks"]:
+                price: float = float(price)
+                ask_volume: float = float(ask_volume)
+                if ask_volume:
+                    self.asks[price] = ask_volume
+                else:
+                    if price in self.asks:
+                        del self.asks[price]
+        if data["bids"]:
+            for price, bid_volume in data["bids"]:
+                price: float = float(price)
+                bid_volume: float = float(bid_volume)
+                if bid_volume:
+                    self.bids[price] = bid_volume
+                else:
+                    if price in self.bids:
+                        del self.bids[price]
         self.generate_tick(dt)
     #------------------------------------------------------------------------------------------------- 
     def on_snapshot(self, asks: Sequence[List], bids: Sequence[List], dt: datetime) -> None:
@@ -1011,6 +1009,7 @@ def sign(
         request_path,
         body
     ])
+
     hashed = hmac.new(
         base64.urlsafe_b64decode(
             (api_key_credentials_map["secret"]).encode('utf-8'),
