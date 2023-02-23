@@ -284,7 +284,7 @@ class DydxRestApi(RestClient):
         now_iso_string = generate_now_iso()
 
         if security == Security.PUBLIC:
-            request.data = None
+            request.data = {}
             return request
         else:
             if request.method in ["GET","DELETE"]:
@@ -363,15 +363,12 @@ class DydxRestApi(RestClient):
         data: dict = {
             "security": Security.PRIVATE,
         }
-        params = {
-            "ethereumAddress":api_key_credentials_map["wallet_address"]
-        }
+
         self.add_request(
             method="GET",
             path=f"/v3/accounts/{self.gateway.id}",
             callback=self.on_query_account,
-            data=data,
-            #params= params
+            data=data
         )
     #------------------------------------------------------------------------------------------------- 
     def query_active_orders(self,symbol:str) -> None:
@@ -383,7 +380,7 @@ class DydxRestApi(RestClient):
         }
         params = {
             "market":symbol,
-            "status":"PENDING"
+            "status":"OPEN"
         }
         self.add_request(
             method="GET",
