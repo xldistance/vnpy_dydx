@@ -287,19 +287,21 @@ class DydxRestApi(RestClient):
             request.data = {}
             return request
         else:
+            request_path = ""
             if request.method in ["GET","DELETE"]:
                 api_params = request.params
                 if api_params:
-                    request.path += "?" +  '&'.join('{key}={value}'.format(key=x[0], value=x[1]) for x in api_params.items() if x[1] is not None)
+                    request_path = request.path + "?" +  '&'.join('{key}={value}'.format(key=x[0], value=x[1]) for x in api_params.items() if x[1] is not None)
                     api_params = {}
             else:
                 api_params = request.data
                 if not api_params:
                     api_params = request.data = {}
                 request.data = json.dumps(api_params)
-
+            if not request_path:
+                request_path = request.path
             signature: str = sign(
-                request_path=request.path,
+                request_path=request_path,
                 method=request.method,
                 iso_timestamp=now_iso_string,
                 data=api_params
@@ -375,20 +377,21 @@ class DydxRestApi(RestClient):
         """
         查询活动委托单
         """
-        data: dict = {
-            "security": Security.PRIVATE,
-        }
         params = {
             "market":symbol,
-            "status":"OPEN"
         }
-        self.add_request(
-            method="GET",
-            path="/v3/orders",
-            callback=self.on_active_orders,
-            data=data,
-            #params = params,
-        )
+        for status in ["OPEN","PENDING"]:
+            data: dict = {
+                "security": Security.PRIVATE,
+            }
+            params.update({"status":status})
+            self.add_request(
+                method="GET",
+                path="/v3/orders",
+                callback=self.on_active_orders,
+                data=data,
+                params = params,
+            )
     #------------------------------------------------------------------------------------------------- 
     def on_active_orders(self,data: dict, request: Request) -> None:
         """
@@ -1006,7 +1009,6 @@ def sign(
         request_path,
         body
     ])
-
     hashed = hmac.new(
         base64.urlsafe_b64decode(
             (api_key_credentials_map["secret"]).encode('utf-8'),
