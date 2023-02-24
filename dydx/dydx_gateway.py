@@ -828,7 +828,7 @@ class DydxWebsocketApi(WebsocketClient):
 
             self.gateway.on_order(order)
         # 持仓推送
-        for keys in data["openPositions"]:
+        for keys in data["account"]["openPositions"]:
             if data["openPositions"][keys]["side"] == "SHORT":
                 direction = Direction.SHORT
                 position.volume = -position.volume
