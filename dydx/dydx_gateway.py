@@ -147,7 +147,6 @@ class DydxGateway(BaseGateway):
         self.history_contracts = copy(self.recording_list)
         #rest查询合约列表
         self.query_contracts = [vt_symbol for vt_symbol in GetFilePath.all_trading_vt_symbols if extract_vt_symbol(vt_symbol)[2] == self.gateway_name and not extract_vt_symbol(vt_symbol)[0].endswith("99")]
-        self.query_function = [self.query_account,self.query_active_orders]
     #------------------------------------------------------------------------------------------------- 
     def connect(self, log_account: dict) -> None:
         """
@@ -221,17 +220,13 @@ class DydxGateway(BaseGateway):
         """
         处理定时任务
         """
-        func = self.query_function.pop(0)
-        if func == self.query_account:
-            func()
-        else:
-            # 查询活动委托单
-            if self.query_contracts:
-                vt_symbol = self.query_contracts.pop(0)
-                symbol,exchange,gateway_name = extract_vt_symbol(vt_symbol)
-                func(symbol)
-                self.query_contracts.append(vt_symbol)
-        self.query_function.append(func)
+        self.query_account()
+        # 查询活动委托单
+        if self.query_contracts:
+            vt_symbol = self.query_contracts.pop(0)
+            symbol,exchange,gateway_name = extract_vt_symbol(vt_symbol)
+            self.query_active_orders(symbol)
+            self.query_contracts.append(vt_symbol)
     #------------------------------------------------------------------------------------------------- 
     def close(self) -> None:
         """
@@ -612,10 +607,10 @@ class DydxRestApi(RestClient):
         self.gateway.on_account(account)
 
         for keys in data["openPositions"]:
-            if data["openPositions"][keys]["size"] == "SHORT":
+            if data["openPositions"][keys]["side"] == "SHORT":
                 direction = Direction.SHORT
                 position.volume = -position.volume
-            elif data["openPositions"][keys]["size"] == "LONG":
+            elif data["openPositions"][keys]["side"] == "LONG":
                 direction = Direction.LONG
             position: PositionData = PositionData(
                 symbol=keys,
@@ -807,7 +802,9 @@ class DydxWebsocketApi(WebsocketClient):
         """
         Websocket账户更新推送
         """
-        for order_data in packet["contents"]["orders"]:
+        data = packet["contents"]
+        # 委托单推送
+        for order_data in data["orders"]:
             # 绑定本地和系统委托号映射
             self.gateway.local_sys_map[order_data["clientId"]] = order_data["id"]
             self.gateway.sys_local_map[order_data["id"]] = order_data["clientId"]
@@ -830,17 +827,35 @@ class DydxWebsocketApi(WebsocketClient):
                 order.offset = self.gateway.orders[order.orderid].offset
 
             self.gateway.on_order(order)
+        # 持仓推送
+        for keys in data["openPositions"]:
+            if data["openPositions"][keys]["side"] == "SHORT":
+                direction = Direction.SHORT
+                position.volume = -position.volume
+            elif data["openPositions"][keys]["side"] == "LONG":
+                direction = Direction.LONG
+            position: PositionData = PositionData(
+                symbol=keys,
+                exchange=Exchange.DYDX,
+                direction=direction,
+                volume=float(data["openPositions"][keys]["size"]),
+                price=float(data["openPositions"][keys]["entryPrice"]),
+                pnl=float(data["openPositions"][keys]["unrealizedPnl"]),
+                gateway_name=self.gateway_name
+            )
+            self.gateway.on_position(position)
 
         if packet["type"] == "subscribed":
-            self.gateway.pos_id = packet["contents"]["account"]["positionId"]
+            self.gateway.pos_id = data["account"]["positionId"]
             self.gateway.id = packet["id"]
             self.gateway.init_query()
             self.gateway.write_log(f"交易接口：{self.gateway_name}，账户资金查询成功")
         else:
-            fills = packet["contents"].get("fills", None)
+            # 成交推送
+            fills = data.get("fills", None)
             if not fills:
                 return
-            for fill_data in packet["contents"]["fills"]:
+            for fill_data in data["fills"]:
                 orderid: str = self.gateway.sys_local_map[fill_data["orderId"]]
 
                 trade: TradeData = TradeData(
