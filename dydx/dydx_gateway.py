@@ -460,7 +460,6 @@ class DydxRestApi(RestClient):
             "market": req.symbol,
             "side": DIRECTION_VT2DYDX[req.direction],
             "type": ORDERTYPE_VT2DYDX[req.type],
-            "timeInForce": "GTT",
             "size": str(req.volume),
             "price": str(req.price),
             "limitFee": str(self.limitFee),
@@ -469,9 +468,15 @@ class DydxRestApi(RestClient):
             "clientId": orderid,
             "signature": signature
         }
-        # reduceOnly不支持GTT
-        #if order.offset == Offset.CLOSE:
-            #data["reduceOnly"] = True
+        # 限价单使用GTT(等待直到成交)
+        if req.type == OrderType.LIMIT:
+            data["timeInForce"] = "GTT"
+        else:
+            # 市价单使用IOC(无法立即成交的部分撤单)
+            data["timeInForce"] = "IOC"
+            if order.offset == Offset.CLOSE:
+                data["reduceOnly"] = True
+                
         self.add_request(
             method="POST",
             path="/v3/orders",
