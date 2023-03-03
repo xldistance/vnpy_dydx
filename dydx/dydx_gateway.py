@@ -971,17 +971,17 @@ class OrderBook():
             return
         sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
         sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
-
-        bid_price_1 = sorted_bids[0][0]
-        ask_price_1 = sorted_asks[0][0]
-        # bids和asks删除错误价格
-        if bid_price_1 >= ask_price_1:
-            if tick.last_price > bid_price_1:
-                if ask_price_1 in list(self.asks):
-                    self.asks.pop(ask_price_1)
-            if (tick.last_price < bid_price_1 or bid_price_1 == ask_price_1):
-                if bid_price_1 in list(self.bids):
-                    self.bids.pop(bid_price_1)
+        if sorted_bids and sorted_asks:
+            bid_price_1 = sorted_bids[0][0]
+            ask_price_1 = sorted_asks[0][0]
+            # bids和asks删除错误价格
+            if bid_price_1 >= ask_price_1:
+                if tick.last_price > bid_price_1:
+                    if ask_price_1 in list(self.asks):
+                        self.asks.pop(ask_price_1)
+                if (tick.last_price < bid_price_1 or bid_price_1 == ask_price_1):
+                    if bid_price_1 in list(self.bids):
+                        self.bids.pop(bid_price_1)
 
         # 重置bids,asks防止字典长度一直递增
         self.bids = {}
