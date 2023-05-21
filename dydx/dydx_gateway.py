@@ -286,7 +286,7 @@ class DydxRestApi(RestClient):
             if request.method in ["GET","DELETE"]:
                 api_params = request.params
                 if api_params:
-                    request_path = request.path + "?" +  '&'.join('{key}={value}'.format(key=x[0], value=x[1]) for x in api_params.items() if x[1] is not None)
+                    request_path = request.path + "?" +  urlencode(api_params)
                     api_params = {}
             else:
                 api_params = request.data
@@ -583,10 +583,10 @@ class DydxRestApi(RestClient):
                 symbol=raw_data,
                 exchange=Exchange.DYDX,
                 name=raw_data,
-                price_tick=data["markets"][raw_data]["tickSize"],
-                size=data["markets"][raw_data]["stepSize"],
-                min_volume=data["markets"][raw_data]["minOrderSize"],
-                max_volume= data["markets"][raw_data]["maxPositionSize"],
+                price_tick=float(data["markets"][raw_data]["tickSize"]),
+                size=float(data["markets"][raw_data]["stepSize"]),
+                min_volume=float(data["markets"][raw_data]["minOrderSize"]),
+                max_volume= float(data["markets"][raw_data]["maxPositionSize"]),
                 product=Product.FUTURES,
                 gateway_name=self.gateway_name
             )
@@ -932,7 +932,7 @@ class OrderBook():
                     self.asks[price] = ask_volume
                 else:
                     if price in self.asks:
-                        del self.asks[price]
+                        self.asks.pop(price)
         if data["bids"]:
             for price, bid_volume in data["bids"]:
                 price: float = float(price)
@@ -941,7 +941,7 @@ class OrderBook():
                     self.bids[price] = bid_volume
                 else:
                     if price in self.bids:
-                        del self.bids[price]
+                        self.bids.pop(price)
         self.generate_tick(dt)
     #------------------------------------------------------------------------------------------------- 
     def on_snapshot(self, asks: Sequence[List], bids: Sequence[List], dt: datetime) -> None:
@@ -969,19 +969,17 @@ class OrderBook():
         tick: TickData = self.tick
         if not tick.last_price:
             return
-        sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:5]
-        sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:5]
+        sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:10]
+        sorted_asks = sorted(self.asks.items(), key=lambda x: x[0], reverse=False)[:10]
         if sorted_bids and sorted_asks:
             bid_price_1 = sorted_bids[0][0]
             ask_price_1 = sorted_asks[0][0]
-            # bids和asks删除错误价格
             if bid_price_1 >= ask_price_1:
-                if tick.last_price > bid_price_1:
-                    if ask_price_1 in list(self.asks):
-                        self.asks.pop(ask_price_1)
-                if (tick.last_price < bid_price_1 or bid_price_1 == ask_price_1):
-                    if bid_price_1 in list(self.bids):
-                        self.bids.pop(bid_price_1)
+                # bids和asks删除错误价格
+                if tick.last_price > ask_price_1:
+                    sorted_asks.pop(0)
+                if tick.last_price < bid_price_1:
+                    sorted_bids.pop(0)
 
         # 重置bids,asks防止字典长度一直递增
         self.bids = {}
