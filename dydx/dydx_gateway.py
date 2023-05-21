@@ -906,7 +906,7 @@ class OrderBook():
         channel: str = data["channel"]
         dt: datetime = datetime.now(TZ_INFO)
         if type_ == "subscribed" and channel == "v3_orderbook":
-            self.on_snapshot(data["contents"]["asks"][:5], data["contents"]["bids"][:5], dt)
+            self.on_snapshot(data["contents"]["asks"], data["contents"]["bids"], dt)
         elif type_ == "channel_data" and channel == "v3_orderbook":
             self.on_update(data["contents"], dt)
         elif channel == "v3_trades":
