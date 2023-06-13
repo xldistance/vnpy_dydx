@@ -808,30 +808,6 @@ class DydxWebsocketApi(WebsocketClient):
         Websocket账户更新推送
         """
         data = packet["contents"]
-        # 委托单推送
-        for order_data in data["orders"]:
-            # 绑定本地和系统委托号映射
-            self.gateway.local_sys_map[order_data["clientId"]] = order_data["id"]
-            self.gateway.sys_local_map[order_data["id"]] = order_data["clientId"]
-            order: OrderData = OrderData(
-                symbol=order_data["market"],
-                exchange=Exchange.DYDX,
-                orderid=order_data["clientId"],
-                type=ORDERTYPE_DYDX2VT[order_data["type"]],
-                direction=DIRECTION_DYDX2VT[order_data["side"]],
-                price=float(order_data["price"]),
-                volume=float(order_data["size"]),
-                traded=float(order_data["size"]) - float(order_data["remainingSize"]),
-                status=STATUS_DYDX2VT.get(order_data["status"], Status.SUBMITTING),
-                datetime=get_local_datetime(order_data["createdAt"]),
-                gateway_name=self.gateway_name
-            )
-            if 0 < order.traded < order.volume:
-                order.status = Status.PARTTRADED
-            if order.orderid in list(self.gateway.orders):
-                order.offset = self.gateway.orders[order.orderid].offset
-
-            self.gateway.on_order(order)
         # 持仓推送
         for keys in data["account"]["openPositions"]:
             if data["openPositions"][keys]["side"] == "SHORT":
@@ -854,7 +830,6 @@ class DydxWebsocketApi(WebsocketClient):
             self.gateway.pos_id = data["account"]["positionId"]
             self.gateway.id = packet["id"]
             self.gateway.init_query()
-            self.gateway.write_log(f"交易接口：{self.gateway_name}，账户资金查询成功")
         else:
             # 成交推送
             fills = data.get("fills", None)
@@ -875,6 +850,38 @@ class DydxWebsocketApi(WebsocketClient):
                     gateway_name=self.gateway_name
                 )
                 self.gateway.on_trade(trade)
+        # 委托单推送
+        for order_data in data["orders"]:
+            # 绑定本地和系统委托号映射
+            local_orderid,gateway_id = order_data["clientId"],order_data["id"]
+            local_sys_map,sys_local_map = self.gateway.local_sys_map,self.gateway.sys_local_map
+            local_sys_map[local_orderid] = gateway_id
+            sys_local_map[gateway_id] = local_orderid
+
+            order: OrderData = OrderData(
+                symbol=order_data["market"],
+                exchange=Exchange.DYDX,
+                orderid=order_data["clientId"],
+                type=ORDERTYPE_DYDX2VT[order_data["type"]],
+                direction=DIRECTION_DYDX2VT[order_data["side"]],
+                price=float(order_data["price"]),
+                volume=float(order_data["size"]),
+                traded=float(order_data["size"]) - float(order_data["remainingSize"]),
+                status=STATUS_DYDX2VT.get(order_data["status"], Status.SUBMITTING),
+                datetime=get_local_datetime(order_data["createdAt"]),
+                gateway_name=self.gateway_name
+            )
+            if 0 < order.traded < order.volume:
+                order.status = Status.PARTTRADED
+            if order.orderid in list(self.gateway.orders):
+                order.offset = self.gateway.orders[order.orderid].offset
+            self.gateway.on_order(order)
+            # 委托单非活动状态删除本地委托单号与系统委托单号键值
+            if not order.is_active():
+                if local_orderid in local_sys_map:
+                    system_id = local_sys_map[local_orderid]
+                    local_sys_map.pop(local_orderid)
+                    sys_local_map.pop(system_id)
 #------------------------------------------------------------------------------------------------- 
 class OrderBook():
     """
@@ -910,11 +917,11 @@ class OrderBook():
         elif type_ == "channel_data" and channel == "v3_orderbook":
             self.on_update(data["contents"], dt)
         elif channel == "v3_trades":
-            self.on_trades(data["contents"]["trades"], dt)
+            self.on_public_trade(data["contents"]["trades"], dt)
     #------------------------------------------------------------------------------------------------- 
-    def on_trades(self, data: list, dt) -> None:
+    def on_public_trade(self, data: list, dt) -> None:
         """
-        成交更新推送
+        逐笔数据推送
         """
         tick: TickData = self.tick
         tick.last_price = float(data[0]["price"])
