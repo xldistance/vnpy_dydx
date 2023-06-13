@@ -12,6 +12,7 @@ import json
 from peewee import chunked
 from requests.exceptions import SSLError
 from urllib.parse import urlencode
+from threading import Lock
 
 from vnpy.trader.database import database_manager
 from vnpy.trader.constant import (
@@ -269,7 +270,9 @@ class DydxRestApi(RestClient):
         self.gateway: DydxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
-        self.order_count: int = 0
+        self.order_count: int = 10000
+        self.order_count_lock: Lock = Lock()
+        self.connect_time: int = 0
     #------------------------------------------------------------------------------------------------- 
     def sign(self, request: Request) -> Request:
         """
@@ -323,6 +326,8 @@ class DydxRestApi(RestClient):
         """
         连接REST服务器
         """
+        self.connect_time = int(datetime.now(TZ_INFO).strftime("%y%m%d%H%M%S"))
+        
         self.proxy_port = proxy_port
         self.proxy_host = proxy_host
         self.server = server
@@ -412,24 +417,21 @@ class DydxRestApi(RestClient):
                 order.offset = self.gateway.orders[order.orderid].offset
             self.gateway.on_order(order)
     #------------------------------------------------------------------------------------------------- 
-    def new_orderid(self) -> str:
+    def new_local_orderid(self) -> str:
         """
-        生成本地委托号
+        生成local_orderid
         """
-        prefix: str = datetime.now().strftime("%Y%m%d%H%M%S")
-
-        self.order_count += 1
-        suffix: str = str(self.order_count).rjust(8, "0")
-
-        orderid: str = prefix + suffix
-        return orderid
+        with self.order_count_lock:
+            self.order_count += 1
+            local_orderid = str(self.connect_time+self.order_count)
+            return local_orderid
     #------------------------------------------------------------------------------------------------- 
     def send_order(self, req: OrderRequest) -> str:
         """
         委托下单
         """
         # 生成本地委托号
-        orderid: str = self.new_orderid()
+        orderid: str = self.new_local_orderid()
 
         # 推送提交中事件
         order: OrderData = req.create_order_data(
@@ -861,7 +863,7 @@ class DydxWebsocketApi(WebsocketClient):
             order: OrderData = OrderData(
                 symbol=order_data["market"],
                 exchange=Exchange.DYDX,
-                orderid=order_data["clientId"],
+                orderid=local_orderid,
                 type=ORDERTYPE_DYDX2VT[order_data["type"]],
                 direction=DIRECTION_DYDX2VT[order_data["side"]],
                 price=float(order_data["price"]),
