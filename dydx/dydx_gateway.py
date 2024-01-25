@@ -474,7 +474,7 @@ class DydxRestApi(RestClient):
         history: List[BarData] = []
         limit = 100  # 最大获取K线数量
         time_consuming_start = time()
-        start_time = req.start_time
+        start_time = req.start
         while True:
             params: dict = {
                 "resolution": INTERVAL_VT2DYDX[req.interval],
