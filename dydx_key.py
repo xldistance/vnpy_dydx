@@ -6,7 +6,7 @@ from dydx3 import private_key_to_public_key_pair_hex
 from web3 import Web3
 from vnpy.trader.setting import dydx_account
 # app.infura.io申请的key
-INFURA_API_KEY = "xxx"
+INFURA_API_KEY = "xxxxxx"
 WEB_PROVIDER_URL = f'https://mainnet.infura.io/v3/{INFURA_API_KEY}'
 # 钱包地址(wallet_address)和eth私钥(eth_private_key)去钱包获取
 client = Client(
