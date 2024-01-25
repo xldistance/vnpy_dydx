@@ -472,15 +472,15 @@ class DydxRestApi(RestClient):
         查询历史数据
         """
         history: List[BarData] = []
-        total_count = 1440  # 获取分钟K线数量
+        limit = 100  # 最大获取K线数量
         time_consuming_start = time()
-        start_time = req.end - timedelta(minutes=total_count)
+        start_time = req.start_time
         while True:
             params: dict = {
                 "resolution": INTERVAL_VT2DYDX[req.interval],
-                "limit": 100,
+                "limit": limit,
                 "fromISO":start_time.isoformat("T", "minutes"),
-                "toISO":(start_time + timedelta(minutes=100)).isoformat("T", "minutes"),
+                "toISO":(start_time + timedelta(minutes=limit)).isoformat("T", "minutes"),
             }
             resp: Response = self.request(method="GET", path=f"/v3/candles/{req.symbol}", data={"security": Security.PUBLIC}, params=params)
             if resp.status_code // 100 != 2:
@@ -505,7 +505,7 @@ class DydxRestApi(RestClient):
                                         gateway_name=self.gateway_name)
                     buf.append(bar)
                 history.extend(buf)
-                start_time += timedelta(minutes=100)
+                start_time += timedelta(minutes=limit)
             if start_time >= req.end:
                 break
         history.sort(key=lambda x: x.datetime)
