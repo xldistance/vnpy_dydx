@@ -98,17 +98,14 @@ TIMEDELTA_MAP: Dict[Interval, timedelta] = {
     Interval.DAILY: timedelta(days=1),
 }
 
-
 class Security(Enum):
     """鉴权类型"""
 
     PUBLIC: int = 0
     PRIVATE: int = 1
 
-
 # 账户信息全局缓存字典
 api_key_credentials_map: Dict[str, str] = {}
-
 
 # ----------------------------------------------------------------------------------------------------
 class DydxGateway(BaseGateway):
@@ -510,64 +507,60 @@ class DydxRestApi(RestClient):
         """
         查询历史数据
         """
-        history: List[BarData] = []
+        history = []
         limit = 100  # 最大获取K线数量
-        time_consuming_start = time()
         start_time = req.start
-        while True:
+        time_consuming_start = time()
+
+        while start_time < req.end:
             end_time = start_time + timedelta(minutes=limit)
-            params: dict = {
+            params = {
                 "resolution": INTERVAL_VT2DYDX[req.interval],
                 "limit": limit,
                 "fromISO": start_time.isoformat("T", "minutes"),
                 "toISO": end_time.isoformat("T", "minutes"),
             }
-            resp: Response = self.request(method="GET", path=f"/v3/candles/{req.symbol}", data={"security": Security.PUBLIC}, params=params)
+
+            resp = self.request("GET", f"/v3/candles/{req.symbol}", data={"security": Security.PUBLIC}, params=params)
             if resp.status_code // 100 != 2:
-                msg = f"合约：{req.vt_symbol}获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
-                self.gateway.write_log(msg)
+                self.gateway.write_log(f"合约：{req.vt_symbol}获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}")
                 break
-            else:
-                data: dict = resp.json()
-                if not data:
-                    self.gateway.write_log(f"合约：{req.vt_symbol}获取历史数据为空")
-                    break
-                buf = []
-                for data in data["candles"]:
-                    bar: BarData = BarData(
-                        symbol=req.symbol,
-                        exchange=req.exchange,
-                        datetime=get_local_datetime(data["startedAt"]),
-                        interval=req.interval,
-                        volume=float(data["baseTokenVolume"]),      # 币的成交量
-                        open_price=float(data["open"]),
-                        high_price=float(data["high"]),
-                        low_price=float(data["low"]),
-                        close_price=float(data["close"]),
-                        open_interest=float(data["startingOpenInterest"]),
-                        gateway_name=self.gateway_name,
-                    )
-                    buf.append(bar)
-                history.extend(buf)
-                start_time = end_time - timedelta(minutes=1)
-            if start_time >= req.end:
+
+            data = resp.json()
+            if not data or 'candles' not in data:
+                self.gateway.write_log(f"合约：{req.vt_symbol}获取历史数据为空")
                 break
+
+            buf = [BarData(
+                symbol=req.symbol,
+                exchange=req.exchange,
+                datetime=get_local_datetime(candle["startedAt"]),
+                interval=req.interval,
+                volume=float(candle["baseTokenVolume"]),
+                open_price=float(candle["open"]),
+                high_price=float(candle["high"]),
+                low_price=float(candle["low"]),
+                close_price=float(candle["close"]),
+                open_interest=float(candle["startingOpenInterest"]),
+                gateway_name=self.gateway_name,
+            ) for candle in data["candles"]]
+
+            history.extend(buf)
+            start_time = end_time - timedelta(minutes=1)  # 将开始时间调整为结束时间前1分钟，避免数据重复
+
         history.sort(key=lambda x: x.datetime)
-        if not history:
+        if history:
+            try:
+                database_manager.save_bar_data(history, False)
+            except Exception as err:
+                self.gateway.write_log(str(err))
+                return
+
+            query_time = round(time() - time_consuming_start, 3)
+            self.gateway.write_log(f"载入{req.vt_symbol}:bar数据，开始时间：{history[0].datetime}，结束时间：{history[-1].datetime}，数据量：{len(history)}，耗时:{query_time}秒")
+        else:
             msg = f"未获取到合约：{req.vt_symbol}历史数据"
             self.gateway.write_log(msg)
-            return
-        for bar_data in chunked(history, 10000):  # 分批保存数据
-            try:
-                database_manager.save_bar_data(bar_data, False)  # 保存数据到数据库
-            except Exception as err:
-                self.gateway.write_log(f"{err}")
-                return
-        time_consuming_end = time()
-        query_time = round(time_consuming_end - time_consuming_start, 3)
-        msg = f"载入{req.vt_symbol}:bar数据，开始时间：{history[0].datetime} ，结束时间： {history[-1].datetime}，数据量：{len(history)}，耗时:{query_time}秒"
-        self.gateway.write_log(msg)
-        return history
     # ----------------------------------------------------------------------------------------------------
     def on_query_contract(self, data: dict, request: Request) -> None:
         """
@@ -786,8 +779,8 @@ class DydxWebsocketApi(WebsocketClient):
         """
         推送数据回报
         """
-        type = packet.get("type", None)
-        if type == "error":
+        type_ = packet.get("type", None)
+        if type_ == "error":
             msg = packet["message"]
             # 过滤重复订阅错误
             if "already subscribed" not in msg:
@@ -829,46 +822,21 @@ class DydxWebsocketApi(WebsocketClient):
         data = packet["contents"]
         # 持仓推送
         for keys in data["account"]["openPositions"]:
-            if data["openPositions"][keys]["side"] == "SHORT":
+            pos_side = data["openPositions"][keys]["side"]
+            if pos_side == "SHORT":
                 direction = Direction.SHORT
-                position.volume = -position.volume
-            elif data["openPositions"][keys]["side"] == "LONG":
+            elif pos_side == "LONG":
                 direction = Direction.LONG
             position: PositionData = PositionData(
                 symbol=keys,
                 exchange=Exchange.DYDX,
                 direction=direction,
-                volume=float(data["openPositions"][keys]["size"]),
+                volume=abs(float(data["openPositions"][keys]["size"])),
                 price=float(data["openPositions"][keys]["entryPrice"]),
                 pnl=float(data["openPositions"][keys]["unrealizedPnl"]),
                 gateway_name=self.gateway_name,
             )
             self.gateway.on_position(position)
-
-        if packet["type"] == "subscribed":
-            self.gateway.pos_id = data["account"]["positionId"]
-            self.gateway.id = packet["id"]
-            self.gateway.init_query()
-        else:
-            # 成交推送
-            fills = data.get("fills", None)
-            if not fills:
-                return
-            for fill_data in data["fills"]:
-                orderid: str = self.gateway.sys_local_map[fill_data["orderId"]]
-
-                trade: TradeData = TradeData(
-                    symbol=fill_data["market"],
-                    exchange=Exchange.DYDX,
-                    orderid=orderid,
-                    tradeid=fill_data["id"],
-                    direction=DIRECTION_DYDX2VT[fill_data["side"]],
-                    price=float(fill_data["price"]),
-                    volume=float(fill_data["size"]),
-                    datetime=get_local_datetime(fill_data["createdAt"]),
-                    gateway_name=self.gateway_name,
-                )
-                self.gateway.on_trade(trade)
         # 委托单推送
         for order_data in data["orders"]:
             # 绑定本地和系统委托号映射
@@ -901,6 +869,30 @@ class DydxWebsocketApi(WebsocketClient):
                     system_id = local_sys_map[local_orderid]
                     local_sys_map.pop(local_orderid)
                     sys_local_map.pop(system_id)
+
+        if packet["type"] == "subscribed":
+            self.gateway.pos_id = data["account"]["positionId"]
+            self.gateway.id = packet["id"]
+            self.gateway.init_query()
+        else:
+            # 成交推送
+            fills = data.get("fills", None)
+            if not fills:
+                return
+            for fill_data in data["fills"]:
+                orderid: str = self.gateway.sys_local_map[fill_data["orderId"]]
+                trade: TradeData = TradeData(
+                    symbol=fill_data["market"],
+                    exchange=Exchange.DYDX,
+                    orderid=orderid,
+                    tradeid=fill_data["id"],
+                    direction=DIRECTION_DYDX2VT[fill_data["side"]],
+                    price=float(fill_data["price"]),
+                    volume=float(fill_data["size"]),
+                    datetime=get_local_datetime(fill_data["createdAt"]),
+                    gateway_name=self.gateway_name,
+                )
+                self.gateway.on_trade(trade)
 # ----------------------------------------------------------------------------------------------------
 class OrderBook:
     """
