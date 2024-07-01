@@ -1,4 +1,5 @@
 import base64
+from collections import defaultdict
 import csv
 import hashlib
 import hmac
@@ -907,7 +908,10 @@ class OrderBook:
         self.asks: Dict[Decimal, Decimal] = dict()
         self.bids: Dict[Decimal, Decimal] = dict()
         self.gateway: DydxGateway = gateway
-
+        # 行情推送限制
+        self.push_limit:bool = True
+        self.public_trade_datetime:Dict[str,"datetime"] = defaultdict(str)
+        self.orderbook_datetime:Dict[str,"datetime"] = defaultdict(str)
         # 创建TICK对象
         self.tick: TickData = TickData(
             symbol=symbol,
@@ -935,9 +939,13 @@ class OrderBook:
         逐笔成交推送
         """
         tick: TickData = self.tick
-        tick.last_price = float(data[0]["price"])
-        #tick.datetime = get_local_datetime(data[0]["createdAt"])
         tick.datetime = datetime.now(TZ_INFO)
+        # 逐笔成交推送频率间隔小于100毫秒直接返回
+        if self.push_limit and (self.public_trade_datetime[tick.vt_symbol] and tick.datetime - self.public_trade_datetime[tick.vt_symbol] < timedelta(milliseconds=100)):
+            return
+        
+        tick.last_price = float(data[0]["price"])
+        self.public_trade_datetime[tick.vt_symbol] = tick.datetime
         self.gateway.on_tick(copy(tick))
     # ----------------------------------------------------------------------------------------------------
     def on_update(self, data: dict) -> None:
@@ -979,8 +987,11 @@ class OrderBook:
         合成tick
         """
         tick: TickData = self.tick
-        if not tick.last_price:
+        tick.datetime = datetime.now(TZ_INFO)
+        # 委托簿两次推送时间间隔小于100毫秒直接返回
+        if not tick.last_price or (self.push_limit and self.orderbook_datetime[tick.vt_symbol] and tick.datetime - self.orderbook_datetime[tick.vt_symbol] < timedelta(milliseconds=100)):
             return
+        self.orderbook_datetime[tick.vt_symbol] = tick.datetime
 
         # 对bids和asks进行排序和裁剪
         sorted_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:10]
@@ -1005,9 +1016,7 @@ class OrderBook:
 
         update_order_book(self.bids, sorted_bids, "bid")
         update_order_book(self.asks, sorted_asks, "ask")
-        if tick.last_price:
-            tick.datetime = datetime.now(TZ_INFO)
-            self.gateway.on_tick(copy(tick))
+        self.gateway.on_tick(copy(tick))
 # ----------------------------------------------------------------------------------------------------
 def generate_now_iso() -> str:
     """
